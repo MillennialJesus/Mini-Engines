@@ -1,0 +1,823 @@
+const modifier = (text) => {
+// ==== World Clock (State-Safe) ====
+const worldClockEngine = (() => {
+  function createWorldClock({
+    initialHour = 8,
+    initialMinute = 0,
+    initialDay = 1,
+    use24Hour = false,
+  } = {}) {
+    let hour = initialHour, minute = initialMinute, day = initialDay;
+    function advance(hours = 0, minutes = 0) {
+      minute += minutes;
+      while (minute >= 60) { minute -= 60; hour += 1; }
+      hour += hours;
+      while (hour >= 24) { hour -= 24; day += 1; }
+    }
+    function getTime() { return { hour, minute, day }; }
+    function formatTime() {
+      const hour12 = ((hour + 11) % 12) + 1;
+      const ampm = hour < 12 ? 'AM' : 'PM';
+      return `Day ${day}, ${hour12}:${minute.toString().padStart(2, '0')} ${ampm}`;
+    }
+    function toJSON() { return { hour, minute, day }; }
+    function fromJSON(obj) {
+      if (!obj) return;
+      hour = obj.hour ?? hour;
+      minute = obj.minute ?? minute;
+      day = obj.day ?? day;
+    }
+    return { advance, getTime, formatTime, toJSON, fromJSON };
+  }
+  return { createWorldClock };
+})();
+
+function getTimeCost(input) {
+  if (/sleep|rest|camp/i.test(input)) return { hours: 8, minutes: 0 };
+  if (/travel|move|walk|run/i.test(input)) return { hours: 1, minutes: 0 };
+  if (/fight|battle|combat/i.test(input)) return { hours: 0, minutes: 20 };
+  if (/wait/i.test(input)) return { hours: 0, minutes: 15 };
+  if (/eat|cook|prepare/i.test(input)) return { hours: 0, minutes: 10 };
+  if (/say|talk|ask|look|open|close|search|use|examine/i.test(input)) return { hours: 0, minutes: 1 };
+  return { hours: 0, minutes: 0 };
+}
+// -- WorldClock: State-Only!
+if (!state.worldClockData) state.worldClockData = { hour: 8, minute: 0, day: 1 };
+const worldClock = worldClockEngine.createWorldClock();
+worldClock.fromJSON(state.worldClockData);
+
+const { hours, minutes } = getTimeCost(text);
+worldClock.advance(hours, minutes);
+
+// ==== Weather (State-Safe) ====
+const weatherEngine = (() => {
+  function createWeatherSystem({
+    initialWeather = "clear",
+    initialBiome = "desert",
+  } = {}) {
+    let weather = initialWeather, biome = initialBiome, day = 1, hour = 8;
+    const WEATHER_TABLE = {
+      desert: { clear: 0.7, windy: 0.15, cloudy: 0.10, rain: 0.03, storm: 0.01, sandstorm: 0.01 },
+      wasteland: { clear: 0.5, cloudy: 0.20, rain: 0.15, storm: 0.05, radstorm: 0.04, fog: 0.03, dusty: 0.03 },
+      // add more as needed...
+    };
+    function randomWeather(biomeType = biome) {
+      const table = WEATHER_TABLE[biomeType] || WEATHER_TABLE.desert;
+      const entries = Object.entries(table);
+      let r = Math.random();
+      for (let [type, chance] of entries) {
+        if (r < chance) return type;
+        r -= chance;
+      }
+      return entries[0][0];
+    }
+    function advance(hours = 1, currentTime = null) {
+      if (currentTime) {
+        day = currentTime.day ?? day;
+        hour = currentTime.hour ?? hour;
+      } else {
+        hour += hours;
+        while (hour >= 24) { hour -= 24; day++; }
+      }
+      weather = randomWeather(biome);
+    }
+    function setWeather(type) { weather = type; }
+    function setBiome(b) { biome = b; }
+    function getWeather() { return { weather, biome, day, hour }; }
+    function toJSON() { return { weather, biome, day, hour }; }
+    function fromJSON(obj) {
+      if (!obj) return;
+      weather = obj.weather ?? weather;
+      biome = obj.biome ?? biome;
+      day = obj.day ?? day;
+      hour = obj.hour ?? hour;
+    }
+    return { advance, setWeather, setBiome, getWeather, toJSON, fromJSON };
+  }
+  return { createWeatherSystem };
+})();
+
+if (!state.weatherData) state.weatherData = { weather: "clear", biome: "desert", day: 1, hour: 8 };
+const weather = weatherEngine.createWeatherSystem();
+weather.fromJSON(state.weatherData);
+
+// Example: Sync weather to clock, advance every hour
+weather.advance(0, worldClock.getTime());
+
+// ==== Inventory (State-Safe) ====
+const inventoryEngine = (() => {
+  function createInventory({ initialItems = [] } = {}) {
+    let items = [...initialItems];
+    function addItem(newItem, quantity = 1) {
+      if (!newItem || !newItem.name) return false;
+      let idx = items.findIndex(item => item.name === newItem.name);
+      if (idx === -1) items.push({ ...newItem, quantity });
+      else items[idx].quantity += quantity;
+      return true;
+    }
+    function removeItem(name, quantity = 1) {
+      let idx = items.findIndex(item => item.name === name);
+      if (idx === -1) return false;
+      items[idx].quantity -= quantity;
+      if (items[idx].quantity <= 0) items.splice(idx, 1);
+      return true;
+    }
+    function listItems() {
+      if (items.length === 0) return "Your inventory is empty.";
+      return items.map(item => {
+        let qty = item.quantity > 1 ? ` x${item.quantity}` : "";
+        let desc = item.description ? ` — ${item.description}` : "";
+        return `${item.name}${qty}${desc}`;
+      }).join("\n");
+    }
+    function toJSON() { return items.map(item => ({ ...item })); }
+    function fromJSON(arr) { if (Array.isArray(arr)) items = arr.map(item => ({ ...item })); }
+    return { addItem, removeItem, listItems, toJSON, fromJSON };
+  }
+  return { createInventory };
+})();
+
+if (!state.inventoryData) state.inventoryData = [];
+const inventory = inventoryEngine.createInventory();
+inventory.fromJSON(state.inventoryData);
+
+// Example: inventory.addItem({ name: "Water Bottle", description: "Restores hydration." }, 1);
+state.inventoryData = inventory.toJSON();
+
+// ==== Factions (State-Safe) ====
+function createFancyFactionsEngine({ initialFactions = [], baseAlignment = 0 } = {}) {
+  let factions = {};
+  initialFactions.forEach(fac => {
+    factions[fac.name] = {
+      name: fac.name,
+      alignment: fac.alignment ?? baseAlignment,
+      member: fac.member ?? false,
+      hostile: fac.hostile ?? false,
+      reputation: fac.reputation ?? 0,
+      standing: fac.standing ?? "neutral",
+      tags: fac.tags || [],
+    };
+  });
+  function ensureFaction(name) {
+    if (!factions[name]) {
+      factions[name] = { name, alignment: baseAlignment, member: false, hostile: false, reputation: 0, standing: "neutral", tags: [] };
+    }
+  }
+  function changeAlignment(name, amt) { ensureFaction(name); factions[name].alignment += amt; return factions[name].alignment; }
+  function changeReputation(name, amt) { ensureFaction(name); factions[name].reputation += amt; return factions[name].reputation; }
+  function setStanding(name, val) { ensureFaction(name); factions[name].standing = val; }
+  function toJSON() { return JSON.parse(JSON.stringify(factions)); }
+  function fromJSON(data) { if (data) factions = JSON.parse(JSON.stringify(data)); }
+  return { changeAlignment, changeReputation, setStanding, toJSON, fromJSON };
+}
+
+if (!state.factionsData) state.factionsData = {}; // Or you can provide some initialFactions here
+const factions = createFancyFactionsEngine();
+factions.fromJSON(state.factionsData);
+// companionsFancy.js
+// Modular Advanced Companions/Party Manager
+
+function createFancyCompanions({
+  initialParty = [],
+  initialReserve = [],
+  maxPartySize = 2
+} = {}) {
+  let party = [...initialParty];
+  let reserve = [...initialReserve];
+
+  // Helper to find companion by tag or name
+  function getCompanionIndex(name, arr = party) {
+    return arr.findIndex(c =>
+      (c.name && c.name.toLowerCase() === name.toLowerCase()) ||
+      (c.uniqueTag && c.uniqueTag === name)
+    );
+  }
+
+  // Add new companion (to party if room, else reserve)
+  function recruit(companion) {
+    if (!companion || !companion.name) return false;
+    if (hasCompanion(companion.name)) return false;
+    const template = {
+      uniqueTag: companion.uniqueTag || companion.name.toLowerCase().replace(/\s+/g, "_"),
+      name: companion.name,
+      level: companion.level || 1,
+      xp: companion.xp || 0,
+      affinity: companion.affinity || 50,
+      affinityType: companion.affinityType || "neutral", // "friend", "rival", "romance", etc.
+      romanceable: !!companion.romanceable,
+      rival: !!companion.rival,
+      statuses: companion.statuses || [],
+      inventory: companion.inventory || [],
+      dialogue: companion.dialogue || [],
+      tags: companion.tags || [],
+      custom: companion.custom || {},
+    };
+    if (party.length < maxPartySize) {
+      party.push(template);
+      return "party";
+    } else {
+      reserve.push(template);
+      return "reserve";
+    }
+  }
+
+  // Remove companion from party/reserve
+  function remove(name) {
+    let idx = getCompanionIndex(name, party);
+    if (idx !== -1) { party.splice(idx, 1); return true; }
+    idx = getCompanionIndex(name, reserve);
+    if (idx !== -1) { reserve.splice(idx, 1); return true; }
+    return false;
+  }
+
+  // Move companion between party & reserve
+  function moveToParty(name) {
+    if (party.length >= maxPartySize) return false;
+    const idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    party.push(reserve[idx]);
+    reserve.splice(idx, 1);
+    return true;
+  }
+  function moveToReserve(name) {
+    const idx = getCompanionIndex(name, party);
+    if (idx === -1) return false;
+    reserve.push(party[idx]);
+    party.splice(idx, 1);
+    return true;
+  }
+
+  // XP/Level system
+  function addXP(name, amount) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    c.xp += amount;
+    // Auto-level up (customize threshold as needed)
+    let levelUp = false;
+    while (c.xp >= xpToLevel(c.level)) {
+      c.xp -= xpToLevel(c.level);
+      c.level++;
+      levelUp = true;
+      if (c.dialogue) c.dialogue.push(`[Level up to ${c.level}!]`);
+    }
+    return levelUp ? c.level : false;
+  }
+  function xpToLevel(level) { return 50 + 25 * (level - 1); }
+
+  // Affinity system (friendship, romance, rival)
+  function changeAffinity(name, amount) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    c.affinity = Math.max(0, Math.min(100, c.affinity + amount));
+    return c.affinity;
+  }
+  function setAffinityType(name, type) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    c.affinityType = type;
+    return true;
+  }
+
+  // Add/remove/get statuses (e.g. "wounded", "tired", "inspired")
+  function addStatus(name, status) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    if (!c.statuses.includes(status)) c.statuses.push(status);
+    return true;
+  }
+  function removeStatus(name, status) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    c.statuses = c.statuses.filter(s => s !== status);
+    return true;
+  }
+  function hasStatus(name, status) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    return c.statuses.includes(status);
+  }
+
+  // Per-companion inventory
+  function addItem(name, item) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    c.inventory.push(item);
+    return true;
+  }
+  function removeItem(name, item) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    let index = c.inventory.indexOf(item);
+    if (index !== -1) {
+      c.inventory.splice(index, 1);
+      return true;
+    }
+    return false;
+  }
+
+  // Dialogue system (add flavor, barks, etc.)
+  function addDialogue(name, line) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    c.dialogue.push(line);
+    return true;
+  }
+  function getDialogue(name) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return [];
+    let c = party[idx] || reserve[idx];
+    return [...c.dialogue];
+  }
+
+  // Add/remove/get tags (like “quest-relevant”, “romanceable”)
+  function addTag(name, tag) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    if (!c.tags.includes(tag)) c.tags.push(tag);
+    return true;
+  }
+  function removeTag(name, tag) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    c.tags = c.tags.filter(t => t !== tag);
+    return true;
+  }
+  function hasTag(name, tag) {
+    let idx = getCompanionIndex(name, party);
+    if (idx === -1) idx = getCompanionIndex(name, reserve);
+    if (idx === -1) return false;
+    let c = party[idx] || reserve[idx];
+    return c.tags.includes(tag);
+  }
+
+  // Custom event hooks (call on events—placeholder)
+  let events = {};
+  function on(eventName, handler) {
+    if (!events[eventName]) events[eventName] = [];
+    events[eventName].push(handler);
+  }
+  function trigger(eventName, data) {
+    if (!events[eventName]) return;
+    for (const fn of events[eventName]) fn(data);
+  }
+
+  // Party management
+  function hasCompanion(name) {
+    return (
+      getCompanionIndex(name, party) !== -1 ||
+      getCompanionIndex(name, reserve) !== -1
+    );
+  }
+  function getParty() { return party.map(c => ({ ...c })); }
+  function getReserve() { return reserve.map(c => ({ ...c })); }
+  function clear() { party = []; reserve = []; }
+
+  // JSON serialization (for state saves)
+  function toJSON() { return { party, reserve }; }
+  function fromJSON(data) {
+    if (data && data.party && Array.isArray(data.party)) party = data.party.map(c => ({ ...c }));
+    if (data && data.reserve && Array.isArray(data.reserve)) reserve = data.reserve.map(c => ({ ...c }));
+  }
+
+  return {
+    recruit, remove,
+    moveToParty, moveToReserve,
+    hasCompanion,
+    getParty, getReserve,
+    addXP, changeAffinity, setAffinityType,
+    addStatus, removeStatus, hasStatus,
+    addItem, removeItem,
+    addDialogue, getDialogue,
+    addTag, removeTag, hasTag,
+    on, trigger,
+    clear, toJSON, fromJSON,
+  };
+}
+  // ==== Companions (State-Safe) ====
+if (!state.companionData) state.companionData = { party: [], reserve: [] };
+const companions = createFancyCompanions();
+companions.fromJSON(state.companionData);
+// Example: companions.recruit({ name: "Dogmeat", level: 1 });
+// eventSystem-fancy.js
+// Modular, extensible event system for RPGs/sims
+
+function createEventSystem({ autoAdvance = false, logEnabled = true } = {}) {
+  let events = [];
+  let eventLog = [];
+  let currentTime = { hour: 8, day: 1 }; // For time-based triggers (if needed)
+
+  // --- Internal: Logging ---
+  function log(str) {
+    if (logEnabled) eventLog.push(`[${nowString()}] ${str}`);
+  }
+
+  // --- Event Definition ---
+  // Each event: { id, label, trigger, action, repeat, category, dependencies, data, priority, onFire, onFail, onComplete, active, ... }
+  function addEvent(event) {
+    if (!event.id) throw new Error("Event must have an id");
+    event.active = event.active ?? true;
+    event.done = event.done ?? false;
+    event.failed = event.failed ?? false;
+    events.push(event);
+    log(`Added event: ${event.label || event.id}`);
+  }
+
+  // --- Time Advancement (optional, for time-based events) ---
+  function setTime({ hour, day }) {
+    currentTime.hour = hour ?? currentTime.hour;
+    currentTime.day = day ?? currentTime.day;
+  }
+
+  function advanceTime(hours = 1) {
+    currentTime.hour += hours;
+    while (currentTime.hour >= 24) {
+      currentTime.hour -= 24;
+      currentTime.day += 1;
+    }
+    log(`Time advanced: Day ${currentTime.day}, ${currentTime.hour}:00`);
+    if (autoAdvance) checkAll();
+  }
+
+  // --- Event Firing/Checking ---
+  function canFire(event) {
+    if (!event.active || event.done || event.failed) return false;
+    // Dependencies met?
+    if (event.dependencies && event.dependencies.length) {
+      for (let depId of event.dependencies) {
+        const dep = events.find(e => e.id === depId);
+        if (!dep || !dep.done) return false;
+      }
+    }
+    // Trigger function? (should return true/false)
+    if (typeof event.trigger === "function") {
+      return !!event.trigger({ time: currentTime, event });
+    }
+    // Else: always fire
+    return true;
+  }
+
+  function fireEvent(eventId, context = {}) {
+    const event = events.find(e => e.id === eventId);
+    if (!event || !canFire(event)) return false;
+    // Run the action
+    if (typeof event.action === "function") event.action(context, event);
+    event.done = true;
+    event.active = false;
+    log(`Event triggered: ${event.label || event.id}`);
+    if (typeof event.onFire === "function") event.onFire(context, event);
+
+    // Auto-repeat if allowed
+    if (event.repeat) {
+      event.done = false;
+      event.active = true;
+    } else if (typeof event.onComplete === "function") {
+      event.onComplete(context, event);
+    }
+    return true;
+  }
+
+  // --- Mass Check/Firing ---
+  function checkAll(context = {}) {
+    // Priority sort: lowest fires first
+    events
+      .filter(ev => canFire(ev))
+      .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+      .forEach(ev => fireEvent(ev.id, context));
+  }
+
+  // --- Manual Failure/Reset ---
+  function failEvent(eventId, context = {}) {
+    const event = events.find(e => e.id === eventId);
+    if (!event || event.failed || event.done) return false;
+    event.failed = true;
+    event.active = false;
+    log(`Event failed: ${event.label || event.id}`);
+    if (typeof event.onFail === "function") event.onFail(context, event);
+    return true;
+  }
+
+  function resetEvent(eventId) {
+    const event = events.find(e => e.id === eventId);
+    if (!event) return false;
+    event.active = true;
+    event.done = false;
+    event.failed = false;
+    log(`Event reset: ${event.label || event.id}`);
+    return true;
+  }
+
+  // --- Event Inspection/Query ---
+  function getEvent(id) { return events.find(ev => ev.id === id); }
+  function getActive() { return events.filter(ev => ev.active && !ev.done && !ev.failed); }
+  function getDone() { return events.filter(ev => ev.done); }
+  function getFailed() { return events.filter(ev => ev.failed); }
+  function getLog() { return [...eventLog]; }
+  function nowString() { return (new Date()).toLocaleString(); }
+
+  // --- Bulk Import/Export for Save/Load ---
+  function toJSON() {
+    return {
+      events: JSON.parse(JSON.stringify(events)),
+      eventLog: [...eventLog],
+      currentTime: { ...currentTime }
+    };
+  }
+  function fromJSON(data) {
+    if (!data) return;
+    events = JSON.parse(JSON.stringify(data.events));
+    eventLog = [...data.eventLog];
+    currentTime = { ...data.currentTime };
+  }
+
+  return {
+    addEvent, fireEvent, failEvent, resetEvent,
+    checkAll, canFire,
+    getEvent, getActive, getDone, getFailed,
+    advanceTime, setTime,
+    getLog, toJSON, fromJSON
+  };
+}
+  // ==== Event System (State-Safe) ====
+if (!state.eventSystemData) state.eventSystemData = { events: [], eventLog: [], currentTime: { hour: 8, day: 1 } };
+const eventSystem = createEventSystem();
+eventSystem.fromJSON(state.eventSystemData);
+// Example: eventSystem.addEvent({ id: "quest1", label: "First Quest", ... });
+state.eventSystemData = eventSystem.toJSON();
+
+// locationHandler-fancy.js
+// Modular, extensible location engine for RPGs/AI Dungeon
+
+function createLocationHandler({
+  logEnabled = true,
+  maxHistory = 25,
+} = {}) {
+  let locations = [];
+  let locationMap = new Map();
+  let history = [];
+  let currentLocation = null;
+
+  function log(str) {
+    if (logEnabled) history.push(`[${new Date().toLocaleString()}] ${str}`);
+    if (history.length > maxHistory) history.shift();
+  }
+
+  // Add/register a location
+  // { id, name, description, keywords, biome, hidden, locked, entryHook, exitHook, requirement }
+  function addLocation(loc) {
+    if (!loc.id) throw new Error("Location must have an id");
+    if (!loc.name) loc.name = loc.id;
+    if (!Array.isArray(loc.keywords)) loc.keywords = [loc.name];
+    loc.hidden = loc.hidden ?? false;
+    loc.locked = loc.locked ?? false;
+    locationMap.set(loc.id, loc);
+    locations.push(loc);
+    log(`Added location: ${loc.name}`);
+  }
+
+  // Find a location by id or keyword (case-insensitive)
+  function findLocation(query) {
+    if (!query) return null;
+    let byId = locationMap.get(query);
+    if (byId) return byId;
+    const norm = q => q.toLowerCase();
+    return locations.find(loc =>
+      loc.keywords.some(k => norm(k) === norm(query)) ||
+      norm(loc.name) === norm(query)
+    ) || null;
+  }
+
+  // Get all available locations (filter hidden/locked)
+  function getAvailable({ showHidden = false, showLocked = false, biome = null } = {}) {
+    return locations.filter(loc => {
+      if (!showHidden && loc.hidden) return false;
+      if (!showLocked && loc.locked) return false;
+      if (biome && loc.biome !== biome) return false;
+      return true;
+    });
+  }
+
+  // Move to a new location (by id/keyword)
+  function travelTo(query, player = null) {
+    const loc = findLocation(query);
+    if (!loc) {
+      log(`Location not found: ${query}`);
+      return { success: false, error: "Location not found." };
+    }
+    if (loc.locked && (!loc.requirement || !loc.requirement(player))) {
+      log(`Location locked: ${loc.name}`);
+      return { success: false, error: "Location is locked." };
+    }
+    if (currentLocation && typeof currentLocation.exitHook === "function") {
+      currentLocation.exitHook(player, loc);
+    }
+    currentLocation = loc;
+    if (typeof loc.entryHook === "function") loc.entryHook(player, loc);
+    log(`Traveled to ${loc.name}`);
+    return { success: true, location: loc };
+  }
+
+  // Lock/unlock/hide/unhide a location
+  function lockLocation(id)   { let l = findLocation(id); if(l) l.locked = true; }
+  function unlockLocation(id) { let l = findLocation(id); if(l) l.locked = false; }
+  function hideLocation(id)   { let l = findLocation(id); if(l) l.hidden = true; }
+  function unhideLocation(id) { let l = findLocation(id); if(l) l.hidden = false; }
+
+  // Get/set current location
+  function getCurrentLocation() { return currentLocation; }
+  function setCurrentLocation(idOrKeyword, player = null) {
+    return travelTo(idOrKeyword, player);
+  }
+
+  // Location history
+  function getHistory() { return [...history]; }
+
+  // For saving/loading
+  function toJSON() {
+    return {
+      locations: JSON.parse(JSON.stringify(locations)),
+      currentLocation: currentLocation ? currentLocation.id : null,
+      history: [...history]
+    };
+  }
+  function fromJSON(data) {
+    if (!data) return;
+    locations = JSON.parse(JSON.stringify(data.locations));
+    locationMap = new Map(locations.map(loc => [loc.id, loc]));
+    history = [...data.history];
+    currentLocation = data.currentLocation ? findLocation(data.currentLocation) : null;
+  }
+
+  return {
+    addLocation,
+    findLocation,
+    getAvailable,
+    travelTo,
+    lockLocation,
+    unlockLocation,
+    hideLocation,
+    unhideLocation,
+    getCurrentLocation,
+    setCurrentLocation,
+    getHistory,
+    toJSON,
+    fromJSON,
+  };
+}
+// ==== Location Handler (State-Safe) ====
+if (!state.locationData) state.locationData = { locations: [], currentLocation: null, history: [] };
+const locations = createLocationHandler();
+locations.fromJSON(state.locationData);
+// Example: locations.addLocation({ id: "vault101", name: "Vault 101", description: "A sealed underground vault." });
+// randomEncounter-fancy.js
+// Modular weighted random encounter engine for RPGs/AI scenarios
+
+function createRandomEncounterSystem({
+  logEnabled = true,
+  allowRepeats = false,
+  maxHistory = 25,
+} = {}) {
+  let encounters = [];
+  let encounterHistory = [];
+
+  function log(str) {
+    if (logEnabled) encounterHistory.push(`[${new Date().toLocaleString()}] ${str}`);
+    if (encounterHistory.length > maxHistory) encounterHistory.shift();
+  }
+
+  // Add an encounter
+  // Example: { id, label, weight, biome, timeOfDay, unique, trigger, action, data }
+  function addEncounter(enc) {
+    if (!enc.id) throw new Error("Encounter must have an id");
+    enc.weight = enc.weight ?? 1;
+    enc.unique = enc.unique ?? false;
+    enc.triggered = false;
+    encounters.push(enc);
+    log(`Added encounter: ${enc.label || enc.id}`);
+  }
+
+  // Remove an encounter (by id)
+  function removeEncounter(id) {
+    const i = encounters.findIndex(e => e.id === id);
+    if (i !== -1) {
+      log(`Removed encounter: ${encounters[i].label || encounters[i].id}`);
+      encounters.splice(i, 1);
+      return true;
+    }
+    return false;
+  }
+
+  // Get a filtered, weighted list of eligible encounters
+  function getEligible({ biome, timeOfDay, extraFilter = null } = {}) {
+    return encounters.filter(enc => {
+      if (enc.unique && enc.triggered && !allowRepeats) return false;
+      if (biome && enc.biome && enc.biome !== biome) return false;
+      if (timeOfDay && enc.timeOfDay && enc.timeOfDay !== timeOfDay) return false;
+      if (typeof enc.trigger === "function" && !enc.trigger()) return false;
+      if (extraFilter && !extraFilter(enc)) return false;
+      return true;
+    });
+  }
+
+  // Weighted random selection
+  function pickEncounter(opts = {}) {
+    const pool = getEligible(opts);
+    if (!pool.length) return null;
+    const totalWeight = pool.reduce((sum, enc) => sum + enc.weight, 0);
+    let roll = Math.random() * totalWeight;
+    for (let enc of pool) {
+      if (roll < enc.weight) return enc;
+      roll -= enc.weight;
+    }
+    return pool[0]; // fallback
+  }
+
+  // Trigger an encounter (either random or forced by id)
+  function triggerEncounter(opts = {}) {
+    let encounter = opts.id
+      ? encounters.find(e => e.id === opts.id)
+      : pickEncounter(opts);
+    if (!encounter) {
+      log("No eligible encounters.");
+      return null;
+    }
+    if (encounter.unique) encounter.triggered = true;
+    log(`Triggered: ${encounter.label || encounter.id}`);
+    if (typeof encounter.action === "function") encounter.action(encounter);
+    return encounter;
+  }
+
+  function getLog() { return [...encounterHistory]; }
+  function getEncounter(id) { return encounters.find(e => e.id === id); }
+  function resetHistory() {
+    encounters.forEach(enc => { enc.triggered = false; });
+    log("Reset all encounter history.");
+  }
+
+  // Import/export for saves
+  function toJSON() {
+    return {
+      encounters: JSON.parse(JSON.stringify(encounters)),
+      encounterHistory: [...encounterHistory]
+    };
+  }
+  function fromJSON(data) {
+    if (!data) return;
+    encounters = JSON.parse(JSON.stringify(data.encounters));
+    encounterHistory = [...data.encounterHistory];
+  }
+
+  return {
+    addEncounter,
+    removeEncounter,
+    triggerEncounter,
+    pickEncounter,
+    getEligible,
+    getEncounter,
+    getLog,
+    resetHistory,
+    toJSON,
+    fromJSON,
+  };
+}
+  if (!state.encounterData) state.encounterData = { encounters: [], encounterHistory: [] };
+  const encounters = createRandomEncounterSystem();
+  encounters.fromJSON(state.encounterData);
+  // ==== SAVE ALL GAME STATE (Do this at the end of your modifier!) ====
+
+  // Save each engine/module's state back into the persistent state object.
+  state.worldClockData      = worldClock.toJSON();
+  state.weatherData         = weather.toJSON();
+  state.inventoryData       = inventory.toJSON();
+  state.factionsData        = factions.toJSON();
+  state.companionData       = companions.toJSON();
+  state.eventSystemData     = eventSystem.toJSON();
+  state.locationData        = locations.toJSON();
+  state.encounterData       = encounters.toJSON();
+
+  // (You can add more modules here as needed.)
+
+return text;
+};
